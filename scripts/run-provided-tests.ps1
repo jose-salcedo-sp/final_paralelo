@@ -19,7 +19,7 @@ $ErrorActionPreference = "Stop"
 
 function Write-Step {
     param([string]$Message)
-    Write-Host "[loco] $Message"
+    Write-Host "[provided-tests] $Message"
 }
 
 function Resolve-ProjectPath {
@@ -49,7 +49,7 @@ function Invoke-JsonRequest {
 Set-Location $ProjectRoot
 Assert-Command "curl.exe"
 
-$testsDir = Join-Path $ProjectRoot "Loco's tests"
+$testsDir = Join-Path $ProjectRoot "provided-tests"
 $requirements = Join-Path $testsDir "requirements.txt"
 $stressTest = Join-Path $testsDir "stress_test.py"
 $videoUtils = Join-Path $testsDir "video_utils_windows.py"
@@ -124,7 +124,7 @@ if (-not $token) {
 try {
     $headers = @{ Authorization = "Bearer $token" }
 
-    Write-Step "Creating workload with Loco no-body request"
+    Write-Step "Creating workload with the provided no-body request"
     $workload = Invoke-JsonRequest -Method "Post" -Uri "$ApiBaseUrl/workloads" -Headers $headers
     $workloadID = $workload.workload_id
     if (-not $workloadID) {
@@ -157,7 +157,7 @@ try {
     Write-Step "Joining filtered frames into $outputVideoPath"
     & $venvPython $videoUtils -action join $outputVideoPath $filteredDir
 
-    Write-Step "Loco flow finished successfully."
+    Write-Step "Provided test workflow finished successfully."
     Write-Step "Workload: $workloadID"
     Write-Step "Output video: $outputVideoPath"
 } finally {
