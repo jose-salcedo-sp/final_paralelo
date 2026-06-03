@@ -18,11 +18,27 @@ go test ./...
 
 ## 3. Run the services on Windows
 
-Open five separate PowerShell terminals. Start from the project root in each terminal:
+To start all services from one PowerShell command:
 
 ```powershell
-Set-Location "C:\Users\nanoh\Documents\8vo\Paralelo II\final_paralelo"
+powershell -ExecutionPolicy Bypass -File .\scripts\start-components.ps1
 ```
+
+This opens a separate PowerShell terminal window for the controller, scheduler, each worker, and the API.
+
+To stop services started by that script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-components.ps1 -Stop
+```
+
+To run everything in hidden background windows and write logs to `logs/` instead:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-components.ps1 -Hidden
+```
+
+Open five separate PowerShell terminals. Start from the project root in each terminal:
 
 ### Terminal 1: Controller
 
@@ -33,7 +49,7 @@ go run ./controller --listen :8090 --image-root ./images --api-endpoint localhos
 ### Terminal 2: Scheduler
 
 ```powershell
-go run ./scheduler --controller localhost:8090
+go run ./scheduler --controller localhost:8090 --poll 250ms
 ```
 
 ### Terminal 3: Worker 1
@@ -130,6 +146,12 @@ curl.exe -s -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:8080/lo
 ```
 
 ## 5. Run Loco's tests on Windows
+
+After starting the Go services, you can run the full Loco flow with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-locos-tests.ps1
+```
 
 Create a Python virtual environment from the project root:
 

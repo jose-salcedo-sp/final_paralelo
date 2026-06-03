@@ -32,6 +32,8 @@ type state struct {
 	nextJobSequence int64
 }
 
+const filteredImageIDOffset int64 = 1000000000
+
 func main() {
 	listen := flag.String("listen", ":8090", "controller listen address")
 	systemName := flag.String("system-name", "DPIP Controller", "system name")
@@ -44,6 +46,7 @@ func main() {
 	if err := os.MkdirAll(*imageRoot, 0o755); err != nil {
 		panic(err)
 	}
+	fmt.Printf("[controller] starting on %s; api_endpoint=%s; image_root=%s\n", *listen, apiEndpointURL, *imageRoot)
 
 	st := &state{
 		workers:   make(map[string]models.Worker),
@@ -75,6 +78,7 @@ func main() {
 		st.mu.Lock()
 		st.workers[worker.Name] = worker
 		st.mu.Unlock()
+		fmt.Printf("[controller] worker registered name=%s rpc=%s tags=%s\n", worker.Name, worker.RPCAddr, strings.Join(worker.Tags, ","))
 
 		c.JSON(http.StatusCreated, transport.RegisterWorkerResponse{
 			APIEndpoint: apiEndpointURL,
@@ -103,6 +107,7 @@ func main() {
 		worker.RunningJobs = req.RunningJobs
 		worker.LastHeartbeat = time.Now().Unix()
 		st.workers[worker.Name] = worker
+		fmt.Printf("[controller] heartbeat worker=%s cpu=%.1f%% memory=%.1f%% running_jobs=%d\n", worker.Name, worker.CPUPercent, worker.MemoryPercent, worker.RunningJobs)
 		c.JSON(http.StatusOK, gin.H{"message": "heartbeat updated"})
 	})
 
@@ -113,6 +118,7 @@ func main() {
 		for _, w := range st.workers {
 			out = append(out, w)
 		}
+		fmt.Printf("[controller] workers requested; count=%d\n", len(out))
 		c.JSON(http.StatusOK, transport.ListWorkersResponse{Workers: out})
 	})
 
@@ -146,6 +152,7 @@ func main() {
 		st.mu.Lock()
 		st.workloads[workloadID] = workload
 		st.mu.Unlock()
+		fmt.Printf("[controller] workload created id=%s name=%s filter=%s dir=%s\n", workload.ID, workload.Name, workload.Filter, workloadDir)
 
 		c.JSON(http.StatusCreated, workload)
 	})
@@ -157,6 +164,7 @@ func main() {
 		for _, w := range st.workloads {
 			out = append(out, w)
 		}
+		fmt.Printf("[controller] workloads requested; count=%d\n", len(out))
 		c.JSON(http.StatusOK, gin.H{"workloads": out})
 	})
 
@@ -168,6 +176,7 @@ func main() {
 			c.JSON(http.StatusNotFound, transport.ErrorResponse{Error: "workload not found"})
 			return
 		}
+		fmt.Printf("[controller] workload requested id=%s status=%s originals=%d filtered=%d running_jobs=%d\n", workload.ID, workload.Status, len(workload.OriginalImages), len(workload.FilteredImages), workload.RunningJobs)
 		c.JSON(http.StatusOK, workload)
 	})
 
@@ -190,7 +199,12 @@ func main() {
 			return
 		}
 
-		imgID := st.allocateImageID()
+		var imgID string
+		if req.Type == "filtered" {
+			imgID = st.allocateFilteredImageID(req.SourceImageID)
+		} else {
+			imgID = st.allocateImageID()
+		}
 		img := models.ImageRecord{
 			ID:            imgID,
 			WorkloadID:    req.WorkloadID,
@@ -211,8 +225,10 @@ func main() {
 				Sequence:        st.allocateJobSequence(),
 			}
 			st.jobs[job.ID] = job
+			fmt.Printf("[controller] original image registered image=%s workload=%s; queued job=%s filter=%s sequence=%d\n", imgID, workload.ID, job.ID, job.Filter, job.Sequence)
 		} else {
 			workload.FilteredImages = appendUnique(workload.FilteredImages, imgID)
+			fmt.Printf("[controller] filtered image registered image=%s workload=%s source=%s\n", imgID, workload.ID, req.SourceImageID)
 		}
 		st.workloads[workload.ID] = workload
 
@@ -222,7 +238,9 @@ func main() {
 	r.GET("/images", func(c *gin.Context) {
 		st.mu.RLock()
 		defer st.mu.RUnlock()
-		c.JSON(http.StatusOK, sortedImages(st.images))
+		images := sortedImages(st.images)
+		fmt.Printf("[controller] images requested; count=%d\n", len(images))
+		c.JSON(http.StatusOK, images)
 	})
 
 	r.GET("/images/:id", func(c *gin.Context) {
@@ -233,6 +251,7 @@ func main() {
 			c.JSON(http.StatusNotFound, transport.ErrorResponse{Error: "image not found"})
 			return
 		}
+		fmt.Printf("[controller] image metadata requested id=%s workload=%s type=%s\n", img.ID, img.WorkloadID, img.Type)
 		c.JSON(http.StatusOK, img)
 	})
 
@@ -248,6 +267,7 @@ func main() {
 		sort.Slice(out, func(i, j int) bool {
 			return out[i].Sequence < out[j].Sequence
 		})
+		fmt.Printf("[controller] pending jobs requested; count=%d\n", len(out))
 		c.JSON(http.StatusOK, transport.ListJobsResponse{Jobs: out})
 	})
 
@@ -284,6 +304,7 @@ func main() {
 		workload.Status = "running"
 		workload.RunningJobs++
 		st.workloads[workload.ID] = workload
+		fmt.Printf("[controller] job assigned job=%s worker=%s workload=%s running_jobs=%d\n", job.ID, worker.Name, job.WorkloadID, workload.RunningJobs)
 
 		c.JSON(http.StatusOK, job)
 	})
@@ -310,9 +331,11 @@ func main() {
 		if req.Error != "" {
 			job.Status = "failed"
 			job.Error = req.Error
+			fmt.Printf("[controller] job failed job=%s worker=%s error=%s\n", job.ID, job.AssignedWorker, req.Error)
 		} else {
 			job.Status = "completed"
 			job.FilteredImageID = req.FilteredImageID
+			fmt.Printf("[controller] job completed job=%s worker=%s filtered_image=%s\n", job.ID, job.AssignedWorker, req.FilteredImageID)
 		}
 		st.jobs[job.ID] = job
 
@@ -332,6 +355,7 @@ func main() {
 		}
 		workload.Status = deriveWorkloadStatus(st.jobs, workload.ID)
 		st.workloads[workload.ID] = workload
+		fmt.Printf("[controller] workload updated id=%s status=%s running_jobs=%d filtered=%d\n", workload.ID, workload.Status, workload.RunningJobs, len(workload.FilteredImages))
 
 		c.JSON(http.StatusOK, job)
 	})
@@ -346,6 +370,7 @@ func main() {
 				active = append(active, workload.ID)
 			}
 		}
+		fmt.Printf("[controller] status requested; workers=%d workloads=%d active=%d\n", len(st.workers), len(st.workloads), len(active))
 		c.JSON(http.StatusOK, transport.ControllerStatusResponse{
 			SystemName:      *systemName,
 			ServerTime:      time.Now().Format(time.RFC3339),
@@ -407,6 +432,18 @@ func normalizeHTTPURL(raw string) string {
 func (st *state) allocateImageID() string {
 	id := strconv.FormatInt(st.nextImageID, 10)
 	st.nextImageID++
+	return id
+}
+
+func (st *state) allocateFilteredImageID(sourceImageID string) string {
+	sourceID, err := strconv.ParseInt(sourceImageID, 10, 64)
+	if err != nil {
+		return st.allocateImageID()
+	}
+	id := strconv.FormatInt(sourceID+filteredImageIDOffset, 10)
+	if _, exists := st.images[id]; exists {
+		return st.allocateImageID()
+	}
 	return id
 }
 

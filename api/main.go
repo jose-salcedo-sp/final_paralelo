@@ -33,6 +33,7 @@ func main() {
 	if err := os.MkdirAll(*imageRoot, 0o755); err != nil {
 		panic(err)
 	}
+	fmt.Printf("[api] starting on %s; controller=%s; image_root=%s\n", *listen, controllerURL, *imageRoot)
 
 	tokens := auth.NewManager(map[string]string{
 		*workerToken: "worker-system",
@@ -53,10 +54,12 @@ func main() {
 		}
 		expectedPass, exists := credentials[user]
 		if !exists || expectedPass != pass {
+			fmt.Printf("[api] login failed for user=%s\n", user)
 			c.JSON(http.StatusUnauthorized, transport.ErrorResponse{Error: "invalid credentials"})
 			return
 		}
 		token := tokens.IssueToken(user)
+		fmt.Printf("[api] login ok for user=%s\n", user)
 		c.JSON(http.StatusOK, transport.LoginResponse{
 			User:  user,
 			Token: token,
@@ -72,6 +75,7 @@ func main() {
 			c.JSON(http.StatusBadRequest, transport.ErrorResponse{Error: "token cannot be revoked"})
 			return
 		}
+		fmt.Println("[api] token revoked; user logged out")
 		c.JSON(http.StatusOK, transport.LogoutResponse{LogoutMessage: "logged out"})
 	})
 
@@ -81,6 +85,7 @@ func main() {
 			c.JSON(http.StatusBadGateway, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
+		fmt.Printf("[api] status requested; active_workloads=%d\n", len(status.ActiveWorkloads))
 		c.JSON(http.StatusOK, status)
 	})
 
@@ -95,6 +100,7 @@ func main() {
 			c.JSON(http.StatusBadGateway, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
+		fmt.Printf("[api] workload created id=%s name=%s filter=%s status=%s\n", out.ID, out.Name, out.Filter, out.Status)
 		c.JSON(http.StatusCreated, gin.H{
 			"workload_id":      out.ID,
 			"filter":           out.Filter,
@@ -114,6 +120,7 @@ func main() {
 			c.JSON(http.StatusBadGateway, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
+		fmt.Printf("[api] workload requested id=%s status=%s originals=%d filtered=%d\n", out.ID, out.Status, len(out.OriginalImages), len(out.FilteredImages))
 		c.JSON(http.StatusOK, gin.H{
 			"workload_id":     out.ID,
 			"filter":          out.Filter,
@@ -179,6 +186,7 @@ func main() {
 			c.JSON(http.StatusBadGateway, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
+		fmt.Printf("[api] image uploaded id=%s workload=%s type=%s bytes=%d file=%s\n", register.ImageID, workloadID, imgType, len(bytesData), fileHeader.Filename)
 
 		c.JSON(http.StatusCreated, gin.H{
 			"workload_id": workloadID,
@@ -193,6 +201,7 @@ func main() {
 			c.JSON(http.StatusBadGateway, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
+		fmt.Printf("[api] image list requested; count=%d\n", len(images))
 		c.JSON(http.StatusOK, images)
 	})
 
@@ -202,6 +211,7 @@ func main() {
 			c.JSON(http.StatusNotFound, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
+		fmt.Printf("[api] image download id=%s workload=%s type=%s path=%s\n", img.ID, img.WorkloadID, img.Type, img.Path)
 		c.FileAttachment(img.Path, filepath.Base(img.Path))
 	})
 

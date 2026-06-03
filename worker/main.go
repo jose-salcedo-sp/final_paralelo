@@ -46,6 +46,7 @@ func main() {
 		Name:       *workerName,
 		Controller: controllerURL,
 	}
+	fmt.Printf("[worker:%s] starting; controller=%s rpc_listen=%s tags=%s\n", *workerName, controllerURL, ln.Addr().String(), strings.Join(tags, ","))
 
 	regResp, err := registerWorker(controllerURL, transport.RegisterWorkerRequest{
 		Name:    *workerName,
@@ -57,6 +58,7 @@ func main() {
 	}
 	w.APIEndpoint = normalizeHTTPURL(regResp.APIEndpoint)
 	w.APIToken = regResp.APIToken
+	fmt.Printf("[worker:%s] registered with controller; api=%s\n", w.Name, w.APIEndpoint)
 
 	if err := rpc.RegisterName("Worker", w); err != nil {
 		panic(err)
@@ -64,32 +66,40 @@ func main() {
 	go rpc.Accept(ln)
 	go w.sendHeartbeats()
 
-	fmt.Printf("worker %s connected to controller %s; API %s; RPC listening on %s\n", *workerName, controllerURL, w.APIEndpoint, ln.Addr().String())
+	fmt.Printf("[worker:%s] ready; rpc=%s\n", *workerName, ln.Addr().String())
 	select {}
 }
 
 func (w *Worker) ProcessJob(args transport.WorkerProcessArgs, reply *transport.WorkerProcessReply) error {
 	w.incRunningJobs()
 	defer w.decRunningJobs()
+	started := time.Now()
+	fmt.Printf("[worker:%s] job started job=%s workload=%s image=%s filter=%s\n", w.Name, args.JobID, args.WorkloadID, args.OriginalImageID, args.Filter)
 
 	input, err := w.downloadImage(args.OriginalImageID)
 	if err != nil {
 		reply.Error = err.Error()
+		fmt.Printf("[worker:%s] job failed during download job=%s image=%s error=%s\n", w.Name, args.JobID, args.OriginalImageID, err)
 		return nil
 	}
+	fmt.Printf("[worker:%s] downloaded image=%s bytes=%d\n", w.Name, args.OriginalImageID, len(input))
 
 	output, err := filters.Apply(args.Filter, input)
 	if err != nil {
 		reply.Error = err.Error()
+		fmt.Printf("[worker:%s] job failed during filter job=%s filter=%s error=%s\n", w.Name, args.JobID, args.Filter, err)
 		return nil
 	}
+	fmt.Printf("[worker:%s] filter applied job=%s output_bytes=%d\n", w.Name, args.JobID, len(output))
 
 	imageID, err := w.uploadFilteredImage(args.WorkloadID, args.OriginalImageID, output)
 	if err != nil {
 		reply.Error = err.Error()
+		fmt.Printf("[worker:%s] job failed during upload job=%s error=%s\n", w.Name, args.JobID, err)
 		return nil
 	}
 	reply.FilteredImageID = imageID
+	fmt.Printf("[worker:%s] job completed job=%s filtered_image=%s duration=%s\n", w.Name, args.JobID, imageID, time.Since(started).Round(time.Millisecond))
 	return nil
 }
 
@@ -97,12 +107,16 @@ func (w *Worker) sendHeartbeats() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
+		cpu := w.estimateCPU()
+		memory := estimateMemoryPercent()
+		runningJobs := w.getRunningJobs()
 		_ = postJSON(w.Controller+"/workers/heartbeat", transport.WorkerHeartbeatRequest{
 			Name:          w.Name,
-			CPUPercent:    w.estimateCPU(),
-			MemoryPercent: estimateMemoryPercent(),
-			RunningJobs:   w.getRunningJobs(),
+			CPUPercent:    cpu,
+			MemoryPercent: memory,
+			RunningJobs:   runningJobs,
 		}, nil)
+		fmt.Printf("[worker:%s] heartbeat sent cpu=%.1f%% memory=%.1f%% running_jobs=%d\n", w.Name, cpu, memory, runningJobs)
 	}
 }
 

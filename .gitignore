@@ -1,4 +1,9 @@
 bin/
 images/
+logs/
+frames/
+filtered/
+*.avi
+*.mp4
 *.log
 *.out
