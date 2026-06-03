@@ -1,0 +1,4 @@
+bin/
+images/
+*.log
+*.out
