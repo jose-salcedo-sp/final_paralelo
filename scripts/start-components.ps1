@@ -7,6 +7,8 @@ param(
     [string]$ImageRoot = "images",
     [string]$WorkerToken = "worker-secret-token",
     [string]$SchedulerPoll = "250ms",
+    [int]$WorkerCount = 2,
+    [string]$WorkerTags = "cpu,fast",
     [switch]$Hidden,
     [switch]$Stop,
     [switch]$Force
@@ -111,6 +113,9 @@ if ($Stop) {
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
     throw "Go was not found on PATH."
 }
+if ($WorkerCount -lt 1) {
+    throw "WorkerCount must be at least 1."
+}
 
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 
@@ -135,15 +140,18 @@ Wait-Port -HostName "127.0.0.1" -Port (Get-Port $ControllerListen)
 $entries += Start-Component -Order 2 -Name "scheduler" -WorkingDirectory $ProjectRoot -Command "go run ./scheduler --controller $ControllerUrl --poll $SchedulerPoll"
 
 $workerDir = Join-Path $ProjectRoot "worker"
-$entries += Start-Component -Order 3 -Name "worker-1" -WorkingDirectory $workerDir -Command "go run main.go --controller $ControllerUrl --worker-name worker-1 --tags cpu,fast"
-$entries += Start-Component -Order 4 -Name "worker-2" -WorkingDirectory $workerDir -Command "go run main.go --controller $ControllerUrl --worker-name worker-2 --tags cpu,default"
+for ($i = 1; $i -le $WorkerCount; $i++) {
+    $workerName = "worker-$i"
+    $entries += Start-Component -Order (2 + $i) -Name $workerName -WorkingDirectory $workerDir -Command "go run main.go --controller $ControllerUrl --worker-name $workerName --tags $(Quote-PS $WorkerTags)"
+}
 
-$entries += Start-Component -Order 5 -Name "api" -WorkingDirectory $ProjectRoot -Command "go run ./api --listen $ApiListen --controller $ControllerUrl --image-root $(Quote-PS $imageRootFull) --worker-token $WorkerToken"
+$entries += Start-Component -Order (3 + $WorkerCount) -Name "api" -WorkingDirectory $ProjectRoot -Command "go run ./api --listen $ApiListen --controller $ControllerUrl --image-root $(Quote-PS $imageRootFull) --worker-token $WorkerToken"
 Wait-Port -HostName "127.0.0.1" -Port (Get-Port $ApiListen)
 
 $entries | ConvertTo-Json -Depth 4 | Set-Content -Path $PidFile -Encoding UTF8
 
 Write-Step "All components started."
+Write-Step "Workers started: $WorkerCount"
 Write-Step "PID file: $PidFile"
 Write-Step "Stop them with: .\scripts\start-components.ps1 -Stop"
 if ($Hidden) {

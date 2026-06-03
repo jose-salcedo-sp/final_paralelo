@@ -26,6 +26,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-components.ps1
 
 This opens a separate PowerShell terminal window for the controller, scheduler, each worker, and the API.
 
+To choose how many workers to start:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-components.ps1 -WorkerCount 6
+```
+
 To stop services started by that script:
 
 ```powershell
@@ -36,6 +42,12 @@ To run everything in hidden background windows and write logs to `logs/` instead
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-components.ps1 -Hidden
+```
+
+You can combine options for a faster large Loco run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-components.ps1 -WorkerCount 6 -Hidden
 ```
 
 Open five separate PowerShell terminals. Start from the project root in each terminal:
