@@ -4,9 +4,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +27,9 @@ type state struct {
 	workloads map[string]models.Workload
 	images    map[string]models.ImageRecord
 	jobs      map[string]models.Job
+
+	nextImageID     int64
+	nextJobSequence int64
 }
 
 func main() {
@@ -32,6 +39,7 @@ func main() {
 	apiEndpoint := flag.String("api-endpoint", "http://localhost:8080", "api endpoint for workers")
 	workerAPIToken := flag.String("worker-api-token", "worker-secret-token", "worker token to call API")
 	flag.Parse()
+	apiEndpointURL := normalizeHTTPURL(*apiEndpoint)
 
 	if err := os.MkdirAll(*imageRoot, 0o755); err != nil {
 		panic(err)
@@ -69,7 +77,7 @@ func main() {
 		st.mu.Unlock()
 
 		c.JSON(http.StatusCreated, transport.RegisterWorkerResponse{
-			APIEndpoint: *apiEndpoint,
+			APIEndpoint: apiEndpointURL,
 			APIToken:    *workerAPIToken,
 			Worker:      worker,
 		})
@@ -109,13 +117,13 @@ func main() {
 	})
 
 	r.POST("/workloads", func(c *gin.Context) {
-		var req transport.CreateWorkloadRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		req, err := bindOptionalCreateWorkload(c)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
-		if req.WorkloadName == "" || (req.Filter != "grayscale" && req.Filter != "blur") {
-			c.JSON(http.StatusBadRequest, transport.ErrorResponse{Error: "invalid workload_name or filter"})
+		if req.Filter != "grayscale" && req.Filter != "blur" {
+			c.JSON(http.StatusBadRequest, transport.ErrorResponse{Error: "invalid filter"})
 			return
 		}
 
@@ -182,7 +190,7 @@ func main() {
 			return
 		}
 
-		imgID := uuid.NewString()
+		imgID := st.allocateImageID()
 		img := models.ImageRecord{
 			ID:            imgID,
 			WorkloadID:    req.WorkloadID,
@@ -200,14 +208,21 @@ func main() {
 				OriginalImageID: imgID,
 				Filter:          workload.Filter,
 				Status:          "pending",
+				Sequence:        st.allocateJobSequence(),
 			}
 			st.jobs[job.ID] = job
 		} else {
-			workload.FilteredImages = append(workload.FilteredImages, imgID)
+			workload.FilteredImages = appendUnique(workload.FilteredImages, imgID)
 		}
 		st.workloads[workload.ID] = workload
 
 		c.JSON(http.StatusCreated, transport.RegisterImageResponse{ImageID: imgID})
+	})
+
+	r.GET("/images", func(c *gin.Context) {
+		st.mu.RLock()
+		defer st.mu.RUnlock()
+		c.JSON(http.StatusOK, sortedImages(st.images))
 	})
 
 	r.GET("/images/:id", func(c *gin.Context) {
@@ -230,6 +245,9 @@ func main() {
 				out = append(out, job)
 			}
 		}
+		sort.Slice(out, func(i, j int) bool {
+			return out[i].Sequence < out[j].Sequence
+		})
 		c.JSON(http.StatusOK, transport.ListJobsResponse{Jobs: out})
 	})
 
@@ -310,7 +328,7 @@ func main() {
 			workload.RunningJobs--
 		}
 		if req.FilteredImageID != "" {
-			workload.FilteredImages = append(workload.FilteredImages, req.FilteredImageID)
+			workload.FilteredImages = appendUnique(workload.FilteredImages, req.FilteredImageID)
 		}
 		workload.Status = deriveWorkloadStatus(st.jobs, workload.ID)
 		st.workloads[workload.ID] = workload
@@ -355,4 +373,70 @@ func deriveWorkloadStatus(jobs map[string]models.Job, workloadID string) string 
 		return "running"
 	}
 	return "completed"
+}
+
+func bindOptionalCreateWorkload(c *gin.Context) (transport.CreateWorkloadRequest, error) {
+	var req transport.CreateWorkloadRequest
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+			return req, err
+		}
+	}
+	if req.Filter == "" {
+		req.Filter = "grayscale"
+	}
+	if req.WorkloadName == "" {
+		req.WorkloadName = "workload-" + uuid.NewString()[:8]
+	}
+	return req, nil
+}
+
+func normalizeHTTPURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return trimmed
+	}
+	trimmed = strings.TrimRight(trimmed, "/")
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return trimmed
+	}
+	return "http://" + trimmed
+}
+
+func (st *state) allocateImageID() string {
+	id := strconv.FormatInt(st.nextImageID, 10)
+	st.nextImageID++
+	return id
+}
+
+func (st *state) allocateJobSequence() int64 {
+	sequence := st.nextJobSequence
+	st.nextJobSequence++
+	return sequence
+}
+
+func sortedImages(images map[string]models.ImageRecord) []models.ImageRecord {
+	out := make([]models.ImageRecord, 0, len(images))
+	for _, img := range images {
+		out = append(out, img)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left, leftErr := strconv.ParseInt(out[i].ID, 10, 64)
+		right, rightErr := strconv.ParseInt(out[j].ID, 10, 64)
+		if leftErr == nil && rightErr == nil {
+			return left < right
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func appendUnique(items []string, item string) []string {
+	for _, existing := range items {
+		if existing == item {
+			return items
+		}
+	}
+	return append(items, item)
 }

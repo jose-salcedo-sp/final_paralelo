@@ -34,6 +34,7 @@ type Job struct {
 	OriginalImageID string `json:"original_image_id"`
 	Filter          string `json:"filter"`
 	Status          string `json:"status"`
+	Sequence        int64  `json:"sequence"`
 	AssignedWorker  string `json:"assigned_worker,omitempty"`
 	FilteredImageID string `json:"filtered_image_id,omitempty"`
 	Error           string `json:"error,omitempty"`

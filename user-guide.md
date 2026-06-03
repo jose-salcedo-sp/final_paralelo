@@ -2,121 +2,180 @@
 
 ## 1. Requirements
 
-- Go 1.22+ (or newer)
-- Unix-like shell (Linux/macOS)
+- Go 1.25 or newer
+- Windows PowerShell
+- `curl.exe` (included with modern Windows)
+- Python 3.10 or newer for Loco's stress/video tools
 
-## 2. Install dependencies
+## 2. Install Go dependencies
 
-From project root:
+From the project root:
 
-```bash
-go mod tidy
+```powershell
+go mod download
+go test ./...
 ```
 
-## 3. Run services (separate terminals)
+## 3. Run the services on Windows
 
-From project root:
+Open five separate PowerShell terminals. Start from the project root in each terminal:
+
+```powershell
+Set-Location "C:\Users\nanoh\Documents\8vo\Paralelo II\final_paralelo"
+```
 
 ### Terminal 1: Controller
 
-```bash
-go run ./controller --listen :8090 --image-root ./images --api-endpoint http://localhost:8080 --worker-api-token worker-secret-token
+```powershell
+go run ./controller --listen :8090 --image-root ./images --api-endpoint localhost:8080 --worker-api-token worker-secret-token
 ```
 
 ### Terminal 2: Scheduler
 
-```bash
-go run ./scheduler --controller http://localhost:8090
+```powershell
+go run ./scheduler --controller localhost:8090
 ```
 
 ### Terminal 3: Worker 1
 
-```bash
-cd worker
-go run main.go --controller http://localhost:8090 --worker-name worker-1 --tags cpu,fast
+```powershell
+Set-Location .\worker
+go run main.go --controller localhost:8090 --worker-name worker-1 --tags cpu,fast
 ```
 
 ### Terminal 4: Worker 2
 
-```bash
-cd worker
-go run main.go --controller http://localhost:8090 --worker-name worker-2 --tags cpu,default
+```powershell
+Set-Location .\worker
+go run main.go --controller localhost:8090 --worker-name worker-2 --tags cpu,default
 ```
 
 ### Terminal 5: API
 
-```bash
-go run ./api --listen :8080 --controller http://localhost:8090 --image-root ./images --worker-token worker-secret-token
+```powershell
+go run ./api --listen :8080 --controller localhost:8090 --image-root ./images --worker-token worker-secret-token
 ```
 
-## 4. API usage
+Worker startup also supports the rubric format:
 
-## Login
-
-```bash
-curl -X POST -u user:password localhost:8080/login
+```powershell
+cd worker
+go run main.go --controller <host>:<port> --worker-name <worker_name> --tags <tag1>,<tag2>
 ```
 
-Save returned token as `TOKEN`.
+## 4. API usage in PowerShell
 
-## Status
+### Login
 
-```bash
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/status
+```powershell
+$login = curl.exe -s -X POST -u user:password http://localhost:8080/login | ConvertFrom-Json
+$TOKEN = $login.token
 ```
 
-## Create workload
+`username:password` also works for Loco's documented flow.
 
-```bash
-curl -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -X POST \
-  -d '{"filter":"grayscale","workload_name":"demo-workload"}' \
-  localhost:8080/workloads
+### System status
+
+```powershell
+curl.exe -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/status
 ```
 
-Save returned `workload_id` as `WID`.
+### Create a workload with JSON
 
-## Upload original image
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -F "data=@sample.png" \
-  -F "workload_id=$WID" \
-  -F "type=original" \
-  -X POST \
-  localhost:8080/images
+```powershell
+$workload = curl.exe -s -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -X POST -d '{"filter":"grayscale","workload_name":"demo-workload"}' http://localhost:8080/workloads | ConvertFrom-Json
+$WID = $workload.workload_id
 ```
 
-Save returned `image_id` as `ORIG_IMG_ID`.
+### Create a workload with Loco's no-body request
 
-## Check workload progress
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -X GET \
-  localhost:8080/workloads/$WID
+```powershell
+$workload = curl.exe -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/workloads | ConvertFrom-Json
+$WID = $workload.workload_id
 ```
 
-After scheduler and worker complete processing, `filtered_images` should include one or more image IDs.
+### Upload an original image
 
-## Download image by ID
+Replace `tests/sample.png` with any PNG file if that sample file is not present.
 
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -X GET \
-  localhost:8080/images/<image_id> \
-  --output downloaded.png
+```powershell
+curl.exe -s -H "Authorization: Bearer $TOKEN" -F "data=@tests/sample.png" -F "workload_id=$WID" -F "type=original" -X POST http://localhost:8080/images
 ```
 
-## Logout
+### Check workload progress
 
-```bash
-curl -X DELETE -H "Authorization: Bearer $TOKEN" localhost:8080/logout
+```powershell
+curl.exe -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/workloads/$WID
 ```
 
-## 5. Notes
+When the scheduler and worker finish, `status` becomes `completed` and `filtered_images` contains the processed image IDs.
 
-- All API responses are JSON except `GET /images/{image_id}`, which returns binary file content.
-- Workloads use statuses: `scheduling`, `running`, `completed`.
-- Workers send periodic heartbeats with resource usage and running jobs.
+### List image records
+
+```powershell
+curl.exe -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/images
+```
+
+### Download an image
+
+```powershell
+$IMGID = "<image_id>"
+curl.exe -L -H "Authorization: Bearer $TOKEN" "http://localhost:8080/images/$IMGID" --output downloaded.png
+```
+
+### Logout
+
+```powershell
+curl.exe -s -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:8080/logout
+```
+
+## 5. Run Loco's tests on Windows
+
+Create a Python virtual environment from the project root:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r "Loco's tests\requirements.txt"
+```
+
+Download a sample video and extract frames:
+
+```powershell
+curl.exe -L -o big_buck_bunny_720p_stereo.avi https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_720p_stereo.avi
+.\.venv\Scripts\python.exe "Loco's tests\video_utils_windows.py" -action extract big_buck_bunny_720p_stereo.avi frames
+```
+
+With all Go services running, create a token and no-body workload:
+
+```powershell
+$login = curl.exe -s -X POST -u username:password http://localhost:8080/login | ConvertFrom-Json
+$TOKEN = $login.token
+$workload = curl.exe -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/workloads | ConvertFrom-Json
+$WID = $workload.workload_id
+```
+
+Push frames to the API:
+
+```powershell
+.\.venv\Scripts\python.exe "Loco's tests\stress_test.py" -action push -workload-id $WID -token $TOKEN -frames-path frames
+```
+
+Wait until the workload is completed:
+
+```powershell
+curl.exe -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/workloads/$WID
+```
+
+Pull filtered images and join them into a video:
+
+```powershell
+.\.venv\Scripts\python.exe "Loco's tests\stress_test.py" -action pull -workload-id $WID -image-type filtered -token $TOKEN -frames-path filtered
+.\.venv\Scripts\python.exe "Loco's tests\video_utils_windows.py" -action join filtered.mp4 filtered
+```
+
+## 6. Notes
+
+- All API responses are JSON except `GET /images/{image_id}`, which returns file content.
+- URL flags accept both `localhost:8090` and `http://localhost:8090`.
+- Workloads use `scheduling`, `running`, and `completed` statuses.
+- Workers download originals from the API, run the filter, upload filtered images, and report heartbeats to the controller.

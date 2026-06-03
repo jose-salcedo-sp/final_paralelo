@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"sort"
+	"strings"
 	"time"
 
 	"final_paralelo/internal/models"
@@ -18,9 +19,10 @@ func main() {
 	controller := flag.String("controller", "http://localhost:8090", "controller endpoint")
 	poll := flag.Duration("poll", 2*time.Second, "poll interval")
 	flag.Parse()
+	controllerURL := normalizeHTTPURL(*controller)
 
 	for {
-		runSchedulingCycle(*controller)
+		runSchedulingCycle(controllerURL)
 		time.Sleep(*poll)
 	}
 }
@@ -34,11 +36,9 @@ func runSchedulingCycle(controller string) {
 	if err != nil || len(jobs) == 0 {
 		return
 	}
-
-	byName := make(map[string]models.Worker, len(workers))
-	for _, w := range workers {
-		byName[w.Name] = w
-	}
+	sort.Slice(jobs, func(i, j int) bool {
+		return jobs[i].Sequence < jobs[j].Sequence
+	})
 
 	for _, job := range jobs {
 		worker, ok := pickWorker(workers)
@@ -51,7 +51,6 @@ func runSchedulingCycle(controller string) {
 		}
 
 		workers = bumpLocalWorker(workers, worker.Name)
-		byName[worker.Name] = workers[0]
 
 		reply, err := processJobRPC(worker.RPCAddr, transport.WorkerProcessArgs{
 			JobID:           job.ID,
@@ -170,4 +169,17 @@ func getJSON(url string, out any) error {
 		return fmt.Errorf("request failed: %s", resp.Status)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func normalizeHTTPURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return trimmed
+	}
+	trimmed = strings.TrimRight(trimmed, "/")
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return trimmed
+	}
+	return "http://" + trimmed
 }

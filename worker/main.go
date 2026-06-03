@@ -34,6 +34,7 @@ func main() {
 	tagsFlag := flag.String("tags", "default", "comma separated tags")
 	rpcListen := flag.String("rpc-listen", "127.0.0.1:0", "worker rpc listen address")
 	flag.Parse()
+	controllerURL := normalizeHTTPURL(*controller)
 
 	tags := parseTags(*tagsFlag)
 	ln, err := net.Listen("tcp", *rpcListen)
@@ -43,10 +44,10 @@ func main() {
 
 	w := &Worker{
 		Name:       *workerName,
-		Controller: *controller,
+		Controller: controllerURL,
 	}
 
-	regResp, err := registerWorker(*controller, transport.RegisterWorkerRequest{
+	regResp, err := registerWorker(controllerURL, transport.RegisterWorkerRequest{
 		Name:    *workerName,
 		RPCAddr: ln.Addr().String(),
 		Tags:    tags,
@@ -54,7 +55,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	w.APIEndpoint = regResp.APIEndpoint
+	w.APIEndpoint = normalizeHTTPURL(regResp.APIEndpoint)
 	w.APIToken = regResp.APIToken
 
 	if err := rpc.RegisterName("Worker", w); err != nil {
@@ -63,7 +64,7 @@ func main() {
 	go rpc.Accept(ln)
 	go w.sendHeartbeats()
 
-	fmt.Printf("worker %s listening on %s\n", *workerName, ln.Addr().String())
+	fmt.Printf("worker %s connected to controller %s; API %s; RPC listening on %s\n", *workerName, controllerURL, w.APIEndpoint, ln.Addr().String())
 	select {}
 }
 
@@ -207,6 +208,19 @@ func parseTags(raw string) []string {
 		return []string{"default"}
 	}
 	return out
+}
+
+func normalizeHTTPURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return trimmed
+	}
+	trimmed = strings.TrimRight(trimmed, "/")
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return trimmed
+	}
+	return "http://" + trimmed
 }
 
 func postJSON(url string, payload any, out any) error {

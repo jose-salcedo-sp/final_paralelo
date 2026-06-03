@@ -19,11 +19,17 @@ It supports authenticated workload creation, image upload/download, worker regis
 
 ## Quick start
 
-Detailed setup and usage is documented in `user-guide.md`.
+Detailed Windows PowerShell setup, API usage, and test instructions are documented in `user-guide.md`.
+
+Minimum requirement:
+
+- Go 1.25+
 
 ## Required deliverables included
 
 - Complete endpoint set from the project PDF.
+- `POST /workloads` supports both the rubric JSON body and no-body requests.
+- `GET /images` returns image records for the stress-test pull flow.
 - In-memory distributed architecture with process-separated services.
 - At least one worker-side filtering method (grayscale, plus blur).
 - Worker startup contract:

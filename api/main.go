@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ func main() {
 	imageRoot := flag.String("image-root", "./images", "image storage root")
 	workerToken := flag.String("worker-token", "worker-secret-token", "worker auth token")
 	flag.Parse()
+	controllerURL := normalizeHTTPURL(*controller)
 
 	if err := os.MkdirAll(*imageRoot, 0o755); err != nil {
 		panic(err)
@@ -36,8 +38,9 @@ func main() {
 		*workerToken: "worker-system",
 	})
 	credentials := map[string]string{
-		"user":  "password",
-		"admin": "admin123",
+		"user":     "password",
+		"username": "password",
+		"admin":    "admin123",
 	}
 
 	r := gin.Default()
@@ -74,7 +77,7 @@ func main() {
 
 	authorized.GET("/status", func(c *gin.Context) {
 		var status transport.ControllerStatusResponse
-		if err := getJSON(*controller+"/status", &status); err != nil {
+		if err := getJSON(controllerURL+"/status", &status); err != nil {
 			c.JSON(http.StatusBadGateway, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -82,13 +85,13 @@ func main() {
 	})
 
 	authorized.POST("/workloads", func(c *gin.Context) {
-		var req transport.CreateWorkloadRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		req, err := bindOptionalCreateWorkload(c)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
 		var out models.Workload
-		if err := postJSON(*controller+"/workloads", req, &out); err != nil {
+		if err := postJSON(controllerURL+"/workloads", req, &out); err != nil {
 			c.JSON(http.StatusBadGateway, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -107,7 +110,7 @@ func main() {
 
 	authorized.GET("/workloads/:workload_id", func(c *gin.Context) {
 		var out models.Workload
-		if err := getJSON(*controller+"/workloads/"+c.Param("workload_id"), &out); err != nil {
+		if err := getJSON(controllerURL+"/workloads/"+c.Param("workload_id"), &out); err != nil {
 			c.JSON(http.StatusBadGateway, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -118,6 +121,7 @@ func main() {
 			"status":          out.Status,
 			"running_jobs":    out.RunningJobs,
 			"filtered_images": out.FilteredImages,
+			"original_images": out.OriginalImages,
 		})
 	})
 
@@ -165,7 +169,7 @@ func main() {
 		}
 
 		var register transport.RegisterImageResponse
-		err = postJSON(*controller+"/images/register", transport.RegisterImageRequest{
+		err = postJSON(controllerURL+"/images/register", transport.RegisterImageRequest{
 			WorkloadID:    workloadID,
 			Type:          imgType,
 			Path:          localPath,
@@ -183,9 +187,18 @@ func main() {
 		})
 	})
 
+	authorized.GET("/images", func(c *gin.Context) {
+		var images []models.ImageRecord
+		if err := getJSON(controllerURL+"/images", &images); err != nil {
+			c.JSON(http.StatusBadGateway, transport.ErrorResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, images)
+	})
+
 	authorized.GET("/images/:image_id", func(c *gin.Context) {
 		var img models.ImageRecord
-		if err := getJSON(*controller+"/images/"+c.Param("image_id"), &img); err != nil {
+		if err := getJSON(controllerURL+"/images/"+c.Param("image_id"), &img); err != nil {
 			c.JSON(http.StatusNotFound, transport.ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -218,6 +231,29 @@ func bearerFromHeader(authHeader string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[1])
+}
+
+func bindOptionalCreateWorkload(c *gin.Context) (transport.CreateWorkloadRequest, error) {
+	var req transport.CreateWorkloadRequest
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+			return req, err
+		}
+	}
+	return req, nil
+}
+
+func normalizeHTTPURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return trimmed
+	}
+	trimmed = strings.TrimRight(trimmed, "/")
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return trimmed
+	}
+	return "http://" + trimmed
 }
 
 func postJSON(url string, payload any, out any) error {
